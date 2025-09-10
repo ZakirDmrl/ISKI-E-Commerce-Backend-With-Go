@@ -1,0 +1,43 @@
+# .gitignore
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Go build artifacts
+/bin
+/pkg
+/vendor
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Upload directories
+uploads/
+temp/
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+
+# Go specific
+*.exe
+*.test
+*.prof
+coverage.out
