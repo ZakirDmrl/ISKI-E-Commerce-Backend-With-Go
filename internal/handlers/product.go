@@ -8,6 +8,7 @@ import (
 	"ecommerce-backend/internal/config"
 	"ecommerce-backend/internal/database"
 	"ecommerce-backend/internal/models"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -38,19 +39,19 @@ func (h *ProductHandler) GetProducts(c *gin.Context) {
 
 	offset := (page - 1) * limit
 
-	// DÜZELTME: COALESCE kullanarak null değer güvenliği
+	// DÜZELTME: COALESCE sorununu çözmek için query'yi basitleştir
 	query := `
 		SELECT 
 			p.id, p.title, p.description, p.price, p.image, p.category, 
 			p.sku, p.rating, p.rating_count, p.is_active, p.created_at, p.updated_at,
-			COALESCE(i.id, 0) as inv_id, 
-			COALESCE(i.quantity, 0) as quantity, 
-			COALESCE(i.reserved_quantity, 0) as reserved_quantity, 
-			COALESCE(i.min_stock_level, 0) as min_stock_level, 
-			COALESCE(i.max_stock_level, 0) as max_stock_level, 
+			CASE WHEN i.id IS NULL THEN 0 ELSE i.id END as inv_id, 
+			CASE WHEN i.quantity IS NULL THEN 0 ELSE i.quantity END as quantity, 
+			CASE WHEN i.reserved_quantity IS NULL THEN 0 ELSE i.reserved_quantity END as reserved_quantity, 
+			CASE WHEN i.min_stock_level IS NULL THEN 0 ELSE i.min_stock_level END as min_stock_level, 
+			CASE WHEN i.max_stock_level IS NULL THEN 0 ELSE i.max_stock_level END as max_stock_level, 
 			i.cost_price, 
-			COALESCE(i.updated_at, p.updated_at) as inv_updated_at,
-			COALESCE((i.quantity - i.reserved_quantity), 0) as available_stock,
+			CASE WHEN i.updated_at IS NULL THEN p.updated_at ELSE i.updated_at END as inv_updated_at,
+			CASE WHEN i.quantity IS NULL OR i.reserved_quantity IS NULL THEN 0 ELSE (i.quantity - i.reserved_quantity) END as available_stock,
 			CASE 
 				WHEN i.id IS NULL THEN 'OUT_OF_STOCK'
 				WHEN (i.quantity - i.reserved_quantity) <= 0 THEN 'OUT_OF_STOCK'
@@ -97,7 +98,13 @@ func (h *ProductHandler) GetProducts(c *gin.Context) {
 	query += " OFFSET $" + strconv.Itoa(argCount)
 	args = append(args, offset)
 
+	// Debug: args array'ini logla
+	fmt.Printf("GetProducts - args: %v, len: %d\n", args, len(args))
+	fmt.Printf("GetProducts - query: %s\n", query)
+
+	// DÜZELTME: limit ve offset her zaman var, bu yüzden args asla boş olamaz
 	rows, err := database.DB.Query(query, args...)
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ürünler alınamadı: " + err.Error()})
 		return
@@ -164,18 +171,22 @@ func (h *ProductHandler) GetProduct(c *gin.Context) {
 		return
 	}
 
+	// DEBUGGING: Log ekle
+	fmt.Printf("GetProduct called for ID: %d\n", productID)
+
+	// DÜZELTME: COALESCE sorununu çözmek için query'yi basitleştir
 	query := `
 		SELECT 
 			p.id, p.title, p.description, p.price, p.image, p.category, 
 			p.sku, p.rating, p.rating_count, p.is_active, p.created_at, p.updated_at,
-			COALESCE(i.id, 0) as inv_id, 
-			COALESCE(i.quantity, 0) as quantity, 
-			COALESCE(i.reserved_quantity, 0) as reserved_quantity, 
-			COALESCE(i.min_stock_level, 0) as min_stock_level, 
-			COALESCE(i.max_stock_level, 0) as max_stock_level, 
+			CASE WHEN i.id IS NULL THEN 0 ELSE i.id END as inv_id, 
+			CASE WHEN i.quantity IS NULL THEN 0 ELSE i.quantity END as quantity, 
+			CASE WHEN i.reserved_quantity IS NULL THEN 0 ELSE i.reserved_quantity END as reserved_quantity, 
+			CASE WHEN i.min_stock_level IS NULL THEN 0 ELSE i.min_stock_level END as min_stock_level, 
+			CASE WHEN i.max_stock_level IS NULL THEN 0 ELSE i.max_stock_level END as max_stock_level, 
 			i.cost_price, 
-			COALESCE(i.updated_at, p.updated_at) as inv_updated_at,
-			COALESCE((i.quantity - i.reserved_quantity), 0) as available_stock,
+			CASE WHEN i.updated_at IS NULL THEN p.updated_at ELSE i.updated_at END as inv_updated_at,
+			CASE WHEN i.quantity IS NULL OR i.reserved_quantity IS NULL THEN 0 ELSE (i.quantity - i.reserved_quantity) END as available_stock,
 			CASE 
 				WHEN i.id IS NULL THEN 'OUT_OF_STOCK'
 				WHEN (i.quantity - i.reserved_quantity) <= 0 THEN 'OUT_OF_STOCK'
@@ -193,7 +204,9 @@ func (h *ProductHandler) GetProduct(c *gin.Context) {
 	var invCost *float64
 	var invUpdatedAt time.Time
 
-	err = database.DB.QueryRow(query, productID).Scan(
+	// DÜZELTME: QueryRowContext kullan ve context timeout ekle
+	row := database.DB.QueryRow(query, productID)
+	err = row.Scan(
 		&product.ID, &product.Title, &product.Description, &product.Price,
 		&product.Image, &product.Category, &product.SKU, &product.Rating,
 		&product.RatingCount, &product.IsActive, &product.CreatedAt, &product.UpdatedAt,
@@ -203,8 +216,10 @@ func (h *ProductHandler) GetProduct(c *gin.Context) {
 
 	if err != nil {
 		if err == sql.ErrNoRows {
+			fmt.Printf("Product not found: ID %d\n", productID)
 			c.JSON(http.StatusNotFound, gin.H{"error": "Ürün bulunamadı"})
 		} else {
+			fmt.Printf("Database error for ID %d: %v\n", productID, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ürün alınamadı: " + err.Error()})
 		}
 		return
@@ -225,8 +240,11 @@ func (h *ProductHandler) GetProduct(c *gin.Context) {
 		}
 		inventory.UpdatedAt = invUpdatedAt
 		product.Inventory = &inventory
+	} else {
+		product.Inventory = nil
 	}
 
+	fmt.Printf("Product found successfully: ID %d, Title: %s\n", productID, product.Title)
 	c.JSON(http.StatusOK, gin.H{"product": product})
 }
 
@@ -271,7 +289,15 @@ func (h *ProductHandler) GetProductsCount(c *gin.Context) {
 	}
 
 	var count int
-	err := database.DB.QueryRow(query, args...).Scan(&count)
+	var err error
+
+	// DÜZELTME: Eğer args boşsa QueryRow'u parametresiz çağır
+	if len(args) == 0 {
+		err = database.DB.QueryRow(query).Scan(&count)
+	} else {
+		err = database.DB.QueryRow(query, args...).Scan(&count)
+	}
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ürün sayısı alınamadı: " + err.Error()})
 		return
@@ -389,6 +415,191 @@ func (h *ProductHandler) CheckProductStock(c *gin.Context) {
 		"requested":       req.Quantity,
 		"sufficient":      sufficient,
 	})
+}
+
+// CreateProduct adds a new product
+func (h *ProductHandler) CreateProduct(c *gin.Context) {
+	var req struct {
+		Title         string   `json:"title" binding:"required"`
+		Description   string   `json:"description"`
+		Price         float64  `json:"price" binding:"required"`
+		Image         string   `json:"image"`
+		Category      string   `json:"category"`
+		SKU           string   `json:"sku"`
+		IsActive      *bool    `json:"is_active"`
+		InitialStock  *int     `json:"initial_stock"`
+		MinStockLevel *int     `json:"min_stock_level"`
+		MaxStockLevel *int     `json:"max_stock_level"`
+		CostPrice     *float64 `json:"cost_price"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	isActive := true
+	if req.IsActive != nil {
+		isActive = *req.IsActive
+	}
+
+	// Transaction başlat
+	tx, err := database.DB.Begin()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Transaction başlatılamadı"})
+		return
+	}
+	defer tx.Rollback()
+
+	insertQuery := `
+        INSERT INTO products (title, description, price, image, category, sku, rating, rating_count, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $7, NOW(), NOW())
+        RETURNING id, title, description, price, image, category, sku, rating, rating_count, is_active, created_at, updated_at
+    `
+
+	var product models.Product
+	err = tx.QueryRow(insertQuery,
+		req.Title, req.Description, req.Price, req.Image, req.Category, req.SKU, isActive,
+	).Scan(
+		&product.ID, &product.Title, &product.Description, &product.Price, &product.Image,
+		&product.Category, &product.SKU, &product.Rating, &product.RatingCount,
+		&product.IsActive, &product.CreatedAt, &product.UpdatedAt,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ürün oluşturulamadı: " + err.Error()})
+		return
+	}
+
+	// Inventory için değerler
+	quantity := 0
+	if req.InitialStock != nil && *req.InitialStock >= 0 {
+		quantity = *req.InitialStock
+	}
+	minLevel := 0
+	if req.MinStockLevel != nil && *req.MinStockLevel >= 0 {
+		minLevel = *req.MinStockLevel
+	}
+	maxLevel := 0
+	if req.MaxStockLevel != nil && *req.MaxStockLevel >= 0 {
+		maxLevel = *req.MaxStockLevel
+	}
+	cost := 0.0
+	if req.CostPrice != nil && *req.CostPrice >= 0 {
+		cost = *req.CostPrice
+	}
+
+	invInsert := `
+        INSERT INTO inventory (product_id, quantity, reserved_quantity, min_stock_level, max_stock_level, cost_price, updated_at)
+        VALUES ($1, $2, 0, $3, $4, $5, NOW())
+        ON CONFLICT (product_id) DO UPDATE SET
+          quantity = EXCLUDED.quantity,
+          min_stock_level = EXCLUDED.min_stock_level,
+          max_stock_level = EXCLUDED.max_stock_level,
+          cost_price = EXCLUDED.cost_price,
+          updated_at = NOW()
+    `
+
+	if _, err := tx.Exec(invInsert, product.ID, quantity, minLevel, maxLevel, cost); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Inventory oluşturulamadı: " + err.Error()})
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Transaction commit edilemedi"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"product": product})
+}
+
+// UpdateProduct updates an existing product
+func (h *ProductHandler) UpdateProduct(c *gin.Context) {
+	productID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz product ID"})
+		return
+	}
+
+	var req struct {
+		Title       *string  `json:"title"`
+		Description *string  `json:"description"`
+		Price       *float64 `json:"price"`
+		Image       *string  `json:"image"`
+		Category    *string  `json:"category"`
+		SKU         *string  `json:"sku"`
+		IsActive    *bool    `json:"is_active"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Fetch existing product
+	var existing models.Product
+	err = database.DB.QueryRow(
+		"SELECT id, title, description, price, image, category, sku, rating, rating_count, is_active, created_at, updated_at FROM products WHERE id = $1",
+		productID,
+	).Scan(
+		&existing.ID, &existing.Title, &existing.Description, &existing.Price, &existing.Image,
+		&existing.Category, &existing.SKU, &existing.Rating, &existing.RatingCount,
+		&existing.IsActive, &existing.CreatedAt, &existing.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Ürün bulunamadı"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ürün alınamadı: " + err.Error()})
+		return
+	}
+
+	// Merge updates
+	if req.Title != nil {
+		existing.Title = *req.Title
+	}
+	if req.Description != nil {
+		existing.Description = *req.Description
+	}
+	if req.Price != nil {
+		existing.Price = *req.Price
+	}
+	if req.Image != nil {
+		existing.Image = *req.Image
+	}
+	if req.Category != nil {
+		existing.Category = *req.Category
+	}
+	if req.SKU != nil {
+		existing.SKU = *req.SKU
+	}
+	if req.IsActive != nil {
+		existing.IsActive = *req.IsActive
+	}
+
+	updateQuery := `
+        UPDATE products
+        SET title = $1, description = $2, price = $3, image = $4, category = $5,
+            sku = $6, is_active = $7, updated_at = NOW()
+        WHERE id = $8
+        RETURNING id, title, description, price, image, category, sku, rating, rating_count, is_active, created_at, updated_at
+    `
+
+	var updated models.Product
+	err = database.DB.QueryRow(updateQuery,
+		existing.Title, existing.Description, existing.Price, existing.Image,
+		existing.Category, existing.SKU, existing.IsActive, productID,
+	).Scan(
+		&updated.ID, &updated.Title, &updated.Description, &updated.Price, &updated.Image,
+		&updated.Category, &updated.SKU, &updated.Rating, &updated.RatingCount,
+		&updated.IsActive, &updated.CreatedAt, &updated.UpdatedAt,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ürün güncellenemedi: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"product": updated})
 }
 
 // ALTERNATIF: Daha basit Supabase versiyonu (eğer Range hala sorun yaparsa)

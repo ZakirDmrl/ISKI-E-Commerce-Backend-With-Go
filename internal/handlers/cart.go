@@ -7,6 +7,7 @@ import (
 	"ecommerce-backend/internal/config"
 	"ecommerce-backend/internal/database"
 	"ecommerce-backend/internal/models"
+	"math"
 	"net/http"
 	"strconv"
 
@@ -70,6 +71,11 @@ func (h *CartHandler) GetCartItems(c *gin.Context) {
 
 		item.Product = &product
 		cartItems = append(cartItems, item)
+	}
+
+	// Boş slice yerine null dönmemesi için garanti altına al
+	if cartItems == nil {
+		cartItems = []models.CartItem{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"items": cartItems})
@@ -143,7 +149,7 @@ func (h *CartHandler) AddOrUpdateCartItem(c *gin.Context) {
 
 	if err != nil {
 		// Cart oluştur
-		insertCartQuery := "INSERT INTO carts (user_id, created_at, updated_at) VALUES ($1, NOW(), NOW()) RETURNING id"
+		insertCartQuery := "INSERT INTO carts (user_id, created_at) VALUES ($1, NOW()) RETURNING id"
 		err = tx.QueryRow(insertCartQuery, userID).Scan(&cartID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Cart oluşturulamadı: " + err.Error()})
@@ -163,7 +169,7 @@ func (h *CartHandler) AddOrUpdateCartItem(c *gin.Context) {
 		newQuantity := existingQuantity + req.Quantity
 		updateQuery := `
 			UPDATE cart_items 
-			SET quantity = $1, updated_at = NOW() 
+			SET quantity = $1 
 			WHERE id = $2 
 			RETURNING id, cart_id, product_id, quantity, created_at
 		`
@@ -264,7 +270,7 @@ func (h *CartHandler) DecrementCartItem(c *gin.Context) {
 		// Miktarı azalt
 		newQuantity = existingQuantity - 1
 		_, err = tx.Exec(
-			"UPDATE cart_items SET quantity = $1, updated_at = NOW() WHERE id = $2",
+			"UPDATE cart_items SET quantity = $1 WHERE id = $2",
 			newQuantity, existingID,
 		)
 		if err != nil {
@@ -385,8 +391,8 @@ func (h *CartHandler) CreateOrder(c *gin.Context) {
 	// Sipariş oluştur
 	var orderID int
 	orderQuery := `
-		INSERT INTO orders (user_id, total_amount, status, created_at, updated_at) 
-		VALUES ($1, $2, 'pending', NOW(), NOW()) 
+		INSERT INTO orders (user_id, total_amount, status, created_at) 
+		VALUES ($1, $2, 'pending', NOW()) 
 		RETURNING id
 	`
 	err = tx.QueryRow(orderQuery, userID, req.TotalAmount).Scan(&orderID)
@@ -423,11 +429,16 @@ func (h *CartHandler) CreateOrder(c *gin.Context) {
 		}
 	}
 
-	// EKLEME: Total amount validation
-	if calculatedTotal != req.TotalAmount {
+	// Vergi ve kargo (frontend ile aynı mantık)
+	tax := calculatedTotal * 0.18
+	shipping := 20.0
+	grandTotal := calculatedTotal + tax + shipping
+
+	// EKLEME: Total amount validation (float tolerance)
+	if math.Abs(grandTotal-req.TotalAmount) > 0.01 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":      "Fiyat uyuşmazlığı",
-			"calculated": calculatedTotal,
+			"calculated": grandTotal,
 			"requested":  req.TotalAmount,
 		})
 		return
@@ -444,8 +455,8 @@ func (h *CartHandler) CreateOrder(c *gin.Context) {
 		}
 	}
 
-	// DÜZELTME: Sipariş durumu workflow - önce pending, sonra processing
-	_, err = tx.Exec("UPDATE orders SET status = 'processing', updated_at = NOW() WHERE id = $1", orderID)
+	// DÜZELTME: Sipariş durumu workflow - önce pending, sonra processing (updated_at kolonu yok)
+	_, err = tx.Exec("UPDATE orders SET status = 'processing' WHERE id = $1", orderID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Sipariş durumu güncellenemedi"})
 		return
@@ -473,7 +484,7 @@ func (h *CartHandler) CreateOrder(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"message":      "Sipariş başarıyla oluşturuldu",
 		"order_id":     orderID,
-		"total_amount": calculatedTotal,
+		"total_amount": grandTotal,
 		"status":       "processing",
 	})
 }

@@ -79,7 +79,7 @@ type Comment struct {
 	Content         string    `json:"content" db:"content"`
 	ParentCommentID *int      `json:"parent_comment_id" db:"parent_comment_id"`
 	CreatedAt       time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
+	// UpdatedAt removed - not in database schema
 	UserName        string    `json:"user_name,omitempty"`
 	UserEmail       string    `json:"user_email,omitempty"`
 	Likes           int       `json:"likes,omitempty"`

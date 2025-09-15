@@ -76,8 +76,10 @@ func main() {
 			products.GET("/categories", productHandler.GetCategories)         // /api/v1/products/categories
 			products.GET("/low-stock-count", productHandler.GetLowStockCount) // /api/v1/products/low-stock-count
 
-			// Stok kontrol endpoint
-			products.POST("/:id/check-stock", productHandler.CheckProductStock) // /api/v1/products/123/check-stock
+			// CRUD + Stok kontrol endpoint
+			products.POST("", middleware.Auth(cfg.JWTSecret), productHandler.CreateProduct)    // POST /api/v1/products
+			products.PUT("/:id", middleware.Auth(cfg.JWTSecret), productHandler.UpdateProduct) // PUT /api/v1/products/:id
+			products.POST("/:id/check-stock", productHandler.CheckProductStock)                // /api/v1/products/123/check-stock
 		}
 
 		// Cart routes (protected)

@@ -2,6 +2,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"ecommerce-backend/internal/config"
 	"ecommerce-backend/internal/database"
 	"ecommerce-backend/internal/models"
@@ -30,30 +31,64 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 
 	userID := c.Query("user_id")
 
-	// SQL query ile comments çek
-	query := `
-        SELECT 
-            c.id, c.product_id, c.user_id, c.content, c.parent_comment_id, 
-            c.created_at, c.updated_at,
-            COALESCE(p.full_name, p.username, SPLIT_PART(p.email, '@', 1), 'Anonim') as user_name,
-            p.email as user_email,
-            COUNT(cl.id) as likes_count,
-            CASE WHEN $2 != '' AND EXISTS(
-                SELECT 1 FROM comment_likes cl2 
-                WHERE cl2.comment_id = c.id AND cl2.user_id = $2
-            ) THEN true ELSE false END as user_liked
-        FROM comments c
-        LEFT JOIN profiles p ON c.user_id = p.id
-        LEFT JOIN comment_likes cl ON c.id = cl.comment_id
-        WHERE c.product_id = $1
-        GROUP BY c.id, c.product_id, c.user_id, c.content, c.parent_comment_id, 
-                 c.created_at, c.updated_at, p.full_name, p.username, p.email
-        ORDER BY c.created_at DESC
-    `
+	// DÜZELTME: Prepared statement yerine direct query kullan
+	var query string
+	var args []interface{}
 
-	rows, err := database.DB.Query(query, productID, userID)
+	if userID != "" {
+		// User ID varsa like durumunu da kontrol et
+		query = `
+			SELECT 
+				c.id, c.product_id, c.user_id, c.content, c.parent_comment_id, 
+				c.created_at,
+				COALESCE(p.full_name, p.username, SPLIT_PART(p.email, '@', 1), 'Anonim') as user_name,
+				p.email as user_email,
+				COUNT(cl.id) as likes_count,
+				CASE WHEN EXISTS(
+					SELECT 1 FROM comment_likes cl2 
+					WHERE cl2.comment_id = c.id AND cl2.user_id = $2
+				) THEN true ELSE false END as user_liked
+			FROM comments c
+			LEFT JOIN profiles p ON c.user_id = p.id
+			LEFT JOIN comment_likes cl ON c.id = cl.comment_id
+			WHERE c.product_id = $1
+			GROUP BY c.id, c.product_id, c.user_id, c.content, c.parent_comment_id, 
+					 c.created_at, p.full_name, p.username, p.email
+			ORDER BY c.created_at DESC
+		`
+		args = []interface{}{productID, userID}
+	} else {
+		// User ID yoksa sadece temel bilgileri al
+		query = `
+			SELECT 
+				c.id, c.product_id, c.user_id, c.content, c.parent_comment_id, 
+				c.created_at,
+				COALESCE(p.full_name, p.username, SPLIT_PART(p.email, '@', 1), 'Anonim') as user_name,
+				p.email as user_email,
+				COUNT(cl.id) as likes_count,
+				false as user_liked
+			FROM comments c
+			LEFT JOIN profiles p ON c.user_id = p.id
+			LEFT JOIN comment_likes cl ON c.id = cl.comment_id
+			WHERE c.product_id = $1
+			GROUP BY c.id, c.product_id, c.user_id, c.content, c.parent_comment_id, 
+					 c.created_at, p.full_name, p.username, p.email
+			ORDER BY c.created_at DESC
+		`
+		args = []interface{}{productID}
+	}
+
+	var rows *sql.Rows
+
+	// DÜZELTME: Eğer args boşsa Query'yi parametresiz çağır
+	if len(args) == 0 {
+		rows, err = database.DB.Query(query)
+	} else {
+		rows, err = database.DB.Query(query, args...)
+	}
+
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Yorumlar alınamadı"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Yorumlar alınamadı: " + err.Error()})
 		return
 	}
 	defer rows.Close()
@@ -68,14 +103,13 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 			&comment.Content,
 			&comment.ParentCommentID,
 			&comment.CreatedAt,
-			&comment.UpdatedAt,
 			&comment.UserName,
 			&comment.UserEmail,
 			&comment.Likes,
 			&comment.UserLiked,
 		)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Yorum verisi işlenemedi"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Yorum verisi işlenemedi: " + err.Error()})
 			return
 		}
 		comments = append(comments, comment)
@@ -97,12 +131,12 @@ func (h *CommentHandler) AddComment(c *gin.Context) {
 	query := `
         INSERT INTO comments (product_id, user_id, content, parent_comment_id) 
         VALUES ($1, $2, $3, $4) 
-        RETURNING id, created_at, updated_at
+        RETURNING id, created_at
     `
 
 	var comment models.Comment
 	err := database.DB.QueryRow(query, req.ProductID, userID, req.Content, req.ParentID).Scan(
-		&comment.ID, &comment.CreatedAt, &comment.UpdatedAt,
+		&comment.ID, &comment.CreatedAt,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Yorum eklenemedi"})

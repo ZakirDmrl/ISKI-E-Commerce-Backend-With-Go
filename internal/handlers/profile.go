@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -77,37 +76,61 @@ func (h *ProfileHandler) UploadAvatar(c *gin.Context) {
 	// Unique filename oluştur
 	filename := fmt.Sprintf("avatar_%s_%d%s", userID, time.Now().Unix(), ext)
 
-	// Upload directory oluştur
-	uploadDir := "uploads/avatars"
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Upload directory oluşturulamadı"})
+	if h.cfg.SupabaseURL == "" || (h.cfg.SupabaseKey == "" && h.cfg.SupabaseServiceKey == "") {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Supabase yapılandırması eksik"})
 		return
 	}
 
-	// Eski avatar dosyasını sil
+	// Kullanılacak anahtar (service role varsa onu kullan)
+	authKey := h.cfg.SupabaseServiceKey
+	if authKey == "" {
+		authKey = h.cfg.SupabaseKey
+	}
+
+	// Eski avatar'ı Supabase'den sil (kullanıcı klasörü içindeyse)
 	var oldAvatarURL string
 	database.DB.QueryRow("SELECT avatar_url FROM profiles WHERE id = $1", userID).Scan(&oldAvatarURL)
-	if oldAvatarURL != "" && strings.Contains(oldAvatarURL, "/uploads/") {
-		oldPath := "." + strings.Split(oldAvatarURL, "/uploads/")[1]
-		os.Remove("uploads/" + oldPath)
+	if oldAvatarURL != "" {
+		prefix := "/storage/v1/object/public/avatars/"
+		if idx := strings.Index(oldAvatarURL, prefix); idx != -1 {
+			rel := oldAvatarURL[idx+len(prefix):]
+			if strings.HasPrefix(rel, userID+"/") {
+				deleteURL := strings.TrimRight(h.cfg.SupabaseURL, "/") + "/storage/v1/object/avatars/" + rel
+				req, _ := http.NewRequest(http.MethodDelete, deleteURL, nil)
+				req.Header.Set("Authorization", "Bearer "+authKey)
+				req.Header.Set("apikey", authKey)
+				_, _ = http.DefaultClient.Do(req)
+			}
+		}
 	}
 
-	// Dosyayı kaydet
-	filePath := filepath.Join(uploadDir, filename)
-	dst, err := os.Create(filePath)
+	// avatars/{userID}/{filename} içine yükle
+	objectPath := filepath.ToSlash(filepath.Join(userID, filename))
+	uploadURL := strings.TrimRight(h.cfg.SupabaseURL, "/") + "/storage/v1/object/avatars/" + objectPath + "?upsert=true"
+
+	req, err := http.NewRequest(http.MethodPost, uploadURL, file)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dosya kaydedilemedi"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Upload isteği oluşturulamadı"})
 		return
 	}
-	defer dst.Close()
+	req.Header.Set("Authorization", "Bearer "+authKey)
+	req.Header.Set("apikey", authKey)
+	req.Header.Set("Content-Type", contentType)
 
-	if _, err := io.Copy(dst, file); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dosya kopyalanamadı"})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Supabase'a bağlanılamadı"})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Supabase yükleme hatası: %s", strings.TrimSpace(string(body)))})
 		return
 	}
 
-	// Public URL oluştur
-	avatarURL := fmt.Sprintf("/uploads/avatars/%s", filename)
+	// Public URL oluştur (bucket public ise)
+	publicURL := strings.TrimRight(h.cfg.SupabaseURL, "/") + "/storage/v1/object/public/avatars/" + objectPath
 
 	// Database'de avatar URL'ini güncelle
 	updateQuery := `
@@ -118,10 +141,15 @@ func (h *ProfileHandler) UploadAvatar(c *gin.Context) {
     `
 
 	var updatedURL string
-	err = database.DB.QueryRow(updateQuery, avatarURL, userID).Scan(&updatedURL)
+	err = database.DB.QueryRow(updateQuery, publicURL, userID).Scan(&updatedURL)
 	if err != nil {
-		// Yüklenen dosyayı sil
-		os.Remove(filePath)
+		// Geri al
+		deleteURL := strings.TrimRight(h.cfg.SupabaseURL, "/") + "/storage/v1/object/avatars/" + objectPath
+		req2, _ := http.NewRequest(http.MethodDelete, deleteURL, nil)
+		req2.Header.Set("Authorization", "Bearer "+authKey)
+		req2.Header.Set("apikey", authKey)
+		_, _ = http.DefaultClient.Do(req2)
+
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Avatar URL güncellenemedi"})
 		return
 	}

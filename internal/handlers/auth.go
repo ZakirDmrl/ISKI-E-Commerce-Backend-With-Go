@@ -147,7 +147,11 @@ func (h *AuthHandler) SignIn(c *gin.Context) {
 			EmailConfirmedAt string `json:"email_confirmed_at,omitempty"`
 			LastSignInAt     string `json:"last_sign_in_at,omitempty"`
 		} `json:"user"`
-		Session struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
+		TokenType    string `json:"token_type"`
+		Session      *struct {
 			AccessToken  string `json:"access_token"`
 			RefreshToken string `json:"refresh_token"`
 			ExpiresIn    int    `json:"expires_in"`
@@ -200,13 +204,25 @@ func (h *AuthHandler) SignIn(c *gin.Context) {
 		"role":       authResponse.User.Role,
 	}
 
+	// Token'lar hem root hem de session içinde gelebilir; güvenle taşı
+	accessToken := authResponse.AccessToken
+	refreshToken := authResponse.RefreshToken
+	expiresIn := authResponse.ExpiresIn
+	tokenType := authResponse.TokenType
+	if accessToken == "" && authResponse.Session != nil {
+		accessToken = authResponse.Session.AccessToken
+		refreshToken = authResponse.Session.RefreshToken
+		expiresIn = authResponse.Session.ExpiresIn
+		tokenType = authResponse.Session.TokenType
+	}
+
 	response := gin.H{
 		"user": appUser,
 		"session": gin.H{
-			"access_token":  authResponse.Session.AccessToken,
-			"refresh_token": authResponse.Session.RefreshToken,
-			"expires_in":    authResponse.Session.ExpiresIn,
-			"token_type":    authResponse.Session.TokenType,
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+			"expires_in":    expiresIn,
+			"token_type":    tokenType,
 		},
 	}
 

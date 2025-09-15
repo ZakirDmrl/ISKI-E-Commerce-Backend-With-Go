@@ -8,11 +8,12 @@ import (
 )
 
 type Config struct {
-	Port        string
-	DatabaseURL string
-	JWTSecret   string
-	SupabaseURL string
-	SupabaseKey string
+	Port               string
+	DatabaseURL        string
+	JWTSecret          string
+	SupabaseURL        string
+	SupabaseKey        string
+	SupabaseServiceKey string
 }
 
 func Load() *Config {
@@ -22,11 +23,12 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Port:        getEnv("PORT", "8080"),
-		DatabaseURL: getEnv("DATABASE_URL", ""),
-		JWTSecret:   getEnv("JWT_SECRET", "your-secret-key"),
-		SupabaseURL: getEnv("SUPABASE_URL", ""),
-		SupabaseKey: getEnv("SUPABASE_ANON_KEY", ""),
+		Port:               getEnv("PORT", "8080"),
+		DatabaseURL:        getEnv("DATABASE_URL", ""),
+		JWTSecret:          getEnv("JWT_SECRET", "your-secret-key"),
+		SupabaseURL:        getEnv("SUPABASE_URL", ""),
+		SupabaseKey:        getEnv("SUPABASE_ANON_KEY", ""),
+		SupabaseServiceKey: getEnv("SUPABASE_SERVICE_ROLE_KEY", ""),
 	}
 }
 
