@@ -356,8 +356,20 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 		&profile.IsAdmin, &profile.AvatarURL, &profile.CreatedAt, &profile.UpdatedAt,
 	)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı profili bulunamadı: " + err.Error()})
-		return
+		// Profil yoksa oluştur ve geri dön
+		insertQuery := `
+			INSERT INTO profiles (id, email, is_admin, created_at, updated_at) 
+			VALUES ($1, $2, false, NOW(), NOW()) 
+			ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email
+			RETURNING id, full_name, username, email, is_admin, avatar_url, created_at, updated_at
+		`
+		if err2 := database.DB.QueryRow(insertQuery, userID, userResponse.Email).Scan(
+			&profile.ID, &profile.FullName, &profile.Username, &profile.Email,
+			&profile.IsAdmin, &profile.AvatarURL, &profile.CreatedAt, &profile.UpdatedAt,
+		); err2 != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Kullanıcı profili oluşturulamadı: " + err2.Error()})
+			return
+		}
 	}
 
 	// AppUser formatında response oluştur

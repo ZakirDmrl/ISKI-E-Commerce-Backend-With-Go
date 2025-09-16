@@ -42,8 +42,16 @@ func (h *ProductHandler) GetProducts(c *gin.Context) {
 	// DÜZELTME: COALESCE sorununu çözmek için query'yi basitleştir
 	query := `
 		SELECT 
-			p.id, p.title, p.description, p.price, p.image, p.category, 
-			p.sku, p.rating, p.rating_count, p.is_active, p.created_at, p.updated_at,
+			p.id,
+			COALESCE(p.title, '') AS title,
+			COALESCE(p.description, '') AS description,
+			COALESCE(p.price, 0) AS price,
+			COALESCE(p.image, '') AS image,
+			COALESCE(p.category, '') AS category,
+			COALESCE(p.sku, '') AS sku,
+			COALESCE(p.rating, 0) AS rating,
+			COALESCE(p.rating_count, 0) AS rating_count,
+			p.is_active, p.created_at, p.updated_at,
 			CASE WHEN i.id IS NULL THEN 0 ELSE i.id END as inv_id, 
 			CASE WHEN i.quantity IS NULL THEN 0 ELSE i.quantity END as quantity, 
 			CASE WHEN i.reserved_quantity IS NULL THEN 0 ELSE i.reserved_quantity END as reserved_quantity, 
@@ -68,9 +76,14 @@ func (h *ProductHandler) GetProducts(c *gin.Context) {
 
 	// Filtreler ekle
 	if search != "" {
+		// Use two distinct placeholders to avoid any driver confusion
 		argCount++
-		query += " AND (p.title ILIKE $" + strconv.Itoa(argCount) + " OR COALESCE(p.description, '') ILIKE $" + strconv.Itoa(argCount) + ")"
+		placeholderTitle := "$" + strconv.Itoa(argCount)
 		args = append(args, "%"+search+"%")
+		argCount++
+		placeholderDesc := "$" + strconv.Itoa(argCount)
+		args = append(args, "%"+search+"%")
+		query += " AND (p.title ILIKE " + placeholderTitle + " OR COALESCE(p.description, '') ILIKE " + placeholderDesc + ")"
 	}
 
 	if category != "" {
@@ -92,11 +105,12 @@ func (h *ProductHandler) GetProducts(c *gin.Context) {
 
 	query += " ORDER BY p.created_at DESC"
 	argCount++
-	query += " LIMIT $" + strconv.Itoa(argCount)
+	limitPlaceholder := "$" + strconv.Itoa(argCount)
 	args = append(args, limit)
 	argCount++
-	query += " OFFSET $" + strconv.Itoa(argCount)
+	offsetPlaceholder := "$" + strconv.Itoa(argCount)
 	args = append(args, offset)
+	query += " LIMIT " + limitPlaceholder + " OFFSET " + offsetPlaceholder
 
 	// Debug: args array'ini logla
 	fmt.Printf("GetProducts - args: %v, len: %d\n", args, len(args))
@@ -177,8 +191,16 @@ func (h *ProductHandler) GetProduct(c *gin.Context) {
 	// DÜZELTME: COALESCE sorununu çözmek için query'yi basitleştir
 	query := `
 		SELECT 
-			p.id, p.title, p.description, p.price, p.image, p.category, 
-			p.sku, p.rating, p.rating_count, p.is_active, p.created_at, p.updated_at,
+			p.id,
+			COALESCE(p.title, '') AS title,
+			COALESCE(p.description, '') AS description,
+			COALESCE(p.price, 0) AS price,
+			COALESCE(p.image, '') AS image,
+			COALESCE(p.category, '') AS category,
+			COALESCE(p.sku, '') AS sku,
+			COALESCE(p.rating, 0) AS rating,
+			COALESCE(p.rating_count, 0) AS rating_count,
+			p.is_active, p.created_at, p.updated_at,
 			CASE WHEN i.id IS NULL THEN 0 ELSE i.id END as inv_id, 
 			CASE WHEN i.quantity IS NULL THEN 0 ELSE i.quantity END as quantity, 
 			CASE WHEN i.reserved_quantity IS NULL THEN 0 ELSE i.reserved_quantity END as reserved_quantity, 
@@ -267,8 +289,12 @@ func (h *ProductHandler) GetProductsCount(c *gin.Context) {
 	// Filtreler ekle (GetProducts ile aynı)
 	if search != "" {
 		argCount++
-		query += " AND (p.title ILIKE $" + strconv.Itoa(argCount) + " OR COALESCE(p.description, '') ILIKE $" + strconv.Itoa(argCount) + ")"
+		placeholderTitle := "$" + strconv.Itoa(argCount)
 		args = append(args, "%"+search+"%")
+		argCount++
+		placeholderDesc := "$" + strconv.Itoa(argCount)
+		args = append(args, "%"+search+"%")
+		query += " AND (p.title ILIKE " + placeholderTitle + " OR COALESCE(p.description, '') ILIKE " + placeholderDesc + ")"
 	}
 
 	if category != "" {
@@ -291,12 +317,8 @@ func (h *ProductHandler) GetProductsCount(c *gin.Context) {
 	var count int
 	var err error
 
-	// DÜZELTME: Eğer args boşsa QueryRow'u parametresiz çağır
-	if len(args) == 0 {
-		err = database.DB.QueryRow(query).Scan(&count)
-	} else {
-		err = database.DB.QueryRow(query, args...).Scan(&count)
-	}
+	// DÜZELTME: Parametreleri her zaman tutarlı şekilde geçir
+	err = database.DB.QueryRow(query, args...).Scan(&count)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ürün sayısı alınamadı: " + err.Error()})
