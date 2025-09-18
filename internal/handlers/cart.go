@@ -368,14 +368,24 @@ func (h *CartHandler) CreateOrder(c *gin.Context) {
 	}
 	defer tx.Rollback()
 
-	// EKLEME: Stok kontrolü sipariş öncesi
+	// EKLEME: Stok kontrolü ve fiyat hesaplamayı ÖNCE yap (overflow/uyuşmazlık kontrolü için)
+	type pricedItem struct {
+		productID  int
+		quantity   int
+		unitPrice  float64
+		totalPrice float64
+	}
+	var pricedItems []pricedItem
+	var calculatedTotal float64
+
 	for _, item := range req.CartItems {
+		// stok
 		var availableStock int
 		stockQuery := `
-			SELECT COALESCE((quantity - reserved_quantity), 0) 
-			FROM inventory 
-			WHERE product_id = $1
-		`
+            SELECT COALESCE((quantity - reserved_quantity), 0) 
+            FROM inventory 
+            WHERE product_id = $1
+        `
 		err = tx.QueryRow(stockQuery, item.ProductID).Scan(&availableStock)
 		if err != nil || availableStock < item.Quantity {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -386,25 +396,8 @@ func (h *CartHandler) CreateOrder(c *gin.Context) {
 			})
 			return
 		}
-	}
 
-	// Sipariş oluştur
-	var orderID int
-	orderQuery := `
-		INSERT INTO orders (user_id, total_amount, status, created_at) 
-		VALUES ($1, $2, 'pending', NOW()) 
-		RETURNING id
-	`
-	err = tx.QueryRow(orderQuery, userID, req.TotalAmount).Scan(&orderID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Sipariş oluşturulamadı: " + err.Error()})
-		return
-	}
-
-	// DÜZELTME: Sipariş öğelerini ekle ve fiyat doğrulaması
-	var calculatedTotal float64
-	for _, item := range req.CartItems {
-		// Güncel fiyatı kontrol et
+		// fiyat
 		var currentPrice float64
 		priceQuery := "SELECT price FROM products WHERE id = $1 AND is_active = true"
 		err = tx.QueryRow(priceQuery, item.ProductID).Scan(&currentPrice)
@@ -413,28 +406,32 @@ func (h *CartHandler) CreateOrder(c *gin.Context) {
 			return
 		}
 
-		// Fiyat değişikliği kontrolü (opsiyonel warning)
-		totalPrice := currentPrice * float64(item.Quantity)
-		calculatedTotal += totalPrice
+		// 2 ondalıkla yuvarla
+		unit := math.Round(currentPrice*100) / 100
+		line := math.Round(unit*float64(item.Quantity)*100) / 100
 
-		orderItemQuery := `
-			INSERT INTO order_items (order_id, product_id, quantity, unit_price, total_price) 
-			VALUES ($1, $2, $3, $4, $5)
-		`
-		_, err = tx.Exec(orderItemQuery, orderID, item.ProductID, item.Quantity,
-			currentPrice, totalPrice)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Sipariş öğeleri eklenemedi: " + err.Error()})
+		// makul sınır kontrolü (ör: 9,999,999,999.99)
+		if line > 9999999999.99 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Tutar sınırı aşıldı (line)"})
 			return
 		}
+
+		calculatedTotal = math.Round((calculatedTotal+line)*100) / 100
+		pricedItems = append(pricedItems, pricedItem{productID: item.ProductID, quantity: item.Quantity, unitPrice: unit, totalPrice: line})
 	}
 
-	// Vergi ve kargo (frontend ile aynı mantık)
-	tax := calculatedTotal * 0.18
+	// Vergi ve kargo
+	tax := math.Round((calculatedTotal*0.18)*100) / 100
 	shipping := 20.0
-	grandTotal := calculatedTotal + tax + shipping
+	grandTotal := math.Round((calculatedTotal+tax+shipping)*100) / 100
 
-	// EKLEME: Total amount validation (float tolerance)
+	// Toplam için sınır kontrolü
+	if grandTotal > 9999999999.99 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tutar sınırı aşıldı (total)"})
+		return
+	}
+
+	// Total amount validation (float tolerance)
 	if math.Abs(grandTotal-req.TotalAmount) > 0.01 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":      "Fiyat uyuşmazlığı",
@@ -442,6 +439,32 @@ func (h *CartHandler) CreateOrder(c *gin.Context) {
 			"requested":  req.TotalAmount,
 		})
 		return
+	}
+
+	// Siparişi şimdi oluştur (doğrulamalar sonrası)
+	var orderID int
+	orderQuery := `
+        INSERT INTO orders (user_id, total_amount, status, created_at) 
+        VALUES ($1, $2, 'pending', NOW()) 
+        RETURNING id
+    `
+	err = tx.QueryRow(orderQuery, userID, grandTotal).Scan(&orderID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Sipariş oluşturulamadı: " + err.Error()})
+		return
+	}
+
+	// Sipariş öğelerini ekle (önceden hesaplanmış, yuvarlanmış değerlerle)
+	for _, it := range pricedItems {
+		orderItemQuery := `
+            INSERT INTO order_items (order_id, product_id, quantity, unit_price, total_price) 
+            VALUES ($1, $2, $3, $4, $5)
+        `
+		_, err = tx.Exec(orderItemQuery, orderID, it.productID, it.quantity, it.unitPrice, it.totalPrice)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Sipariş öğeleri eklenemedi: " + err.Error()})
+			return
+		}
 	}
 
 	// Sepeti temizle

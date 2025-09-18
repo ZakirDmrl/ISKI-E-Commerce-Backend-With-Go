@@ -93,7 +93,7 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var comments []models.Comment
+	comments := make([]models.Comment, 0)
 	for rows.Next() {
 		var comment models.Comment
 		err := rows.Scan(
